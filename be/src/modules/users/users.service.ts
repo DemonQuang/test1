@@ -1,0 +1,119 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { CreateUserDto } from './dto/create-user.dto';
+import { CreateAuthDto } from '@/auth/dto/create-auth.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { User } from './schemas/user.schema';
+import { InjectModel } from '@nestjs/mongoose/dist/common/mongoose.decorators';
+import mongoose, { Model, mongo } from 'mongoose';
+import { hash } from 'node:crypto';
+import { hashPassword } from '@/helpers/util';
+import { BehaviorSubject } from 'rxjs';
+import aqp from 'api-query-params';
+import { v4 as uuidv4 } from 'uuid';
+import dayjs from 'dayjs';
+
+@Injectable()
+export class UsersService {
+  constructor(
+    @InjectModel(User.name)
+    private userModel: Model<User>,
+
+  ) { }
+
+  isEmailExist = async (email: string) => {
+    const users = await this.userModel.exists({ email });
+    if (users) {
+      return true;
+    } return false;
+  }
+
+  async create(createUserDto: CreateUserDto) {
+    const { name, email, password, address, phone, image } = createUserDto;
+    //check if email exist
+    const isExist = await this.isEmailExist(email);
+    if (isExist) {
+      throw new BadRequestException('Email already exists');
+    }
+
+    //hash password before save to database
+    const hashedPassword = await hashPassword(password);
+
+    const user = await this.userModel.create({
+      name,
+      email,
+      password: hashedPassword, address,
+      phone,
+      image
+    });
+    return { _id: user._id }
+  }
+
+  async findAll(query: string, current: number, pageSize: string) {
+    const { filter, sort } = aqp(query);
+    if (current) delete filter.current;
+    if (pageSize) delete filter.pageSize;
+    if (!current) current = 1;
+    if (!pageSize) pageSize = '10';
+
+    const totalItems = (await this.userModel.find(filter)).length;
+    const totalPages = Math.ceil(totalItems / +pageSize);
+    const skip = (current - 1) * +pageSize;
+    const results = await this.userModel
+      .find(filter)
+      .sort(sort as any)
+      .limit(+pageSize)
+      .skip(skip)
+      .select('-password');
+    return {
+      results,
+      totalPages,
+    };
+  }
+
+  findOne(id: number) {
+    return `This action returns a #${id} user`;
+  }
+  async findByEmail(email: string) {
+    return await this.userModel.findOne({ email });
+  }
+
+  async update(updateUserDto: UpdateUserDto) {
+    return await this.userModel.updateOne(
+      { _id: updateUserDto._id },
+      { ...updateUserDto }
+    );
+  }
+
+  async remove(_id: string) {
+    if (mongoose.isValidObjectId(_id)) {
+      return this.userModel.deleteOne({ _id });
+    }
+    else {
+      throw new BadRequestException('Invalid user id');
+    }
+
+  }
+  async handleRegister(registerDto: CreateAuthDto) {
+    const { name, email, password } = registerDto;
+    //check if email exist
+    const isExist = await this.isEmailExist(email);
+    if (isExist) {
+      throw new BadRequestException('Email already exists');
+    }
+
+    //hash password before save to database
+    const hashedPassword = await hashPassword(password);
+
+    const user = await this.userModel.create({
+      name,
+      email,
+      password: hashedPassword,
+      isActive: false,
+      codeId: uuidv4(),
+      codeExpired: dayjs().add(1, 'day').toDate(),
+    });
+    // send email to user
+    return { _id: user._id }
+
+  }
+}
